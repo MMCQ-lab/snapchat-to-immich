@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+Snapchat-Immich-Import/
+client_secret*.json
+*.zip
