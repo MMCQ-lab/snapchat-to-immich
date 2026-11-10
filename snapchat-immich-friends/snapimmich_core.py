@@ -25,7 +25,7 @@ import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 APP_NAME = 'Snapchat Memories to Immich'
-VERSION = '2.0.0'
+VERSION = '2.1.0'
 DEFAULT_ALBUM = 'Snapchat Memories'
 DEFAULT_WORK_DIR = Path.home() / 'Snapchat-Immich-Import'
 DEVICE_ID = 'snapchat-friends-importer'
@@ -53,6 +53,11 @@ class ImportError_(RuntimeError):
 
 
 # --------------------------------------------------------------------------- helpers
+
+def resource_dir() -> Path:
+    """Folder holding files bundled with the app (PyInstaller sets sys._MEIPASS)."""
+    return Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+
 
 def config_dir() -> Path:
     if sys.platform.startswith('win'):
@@ -227,6 +232,8 @@ class Importer:
         self.cancel = cancel or threading.Event()
         self.session = requests.Session()
         self.session.headers['User-Agent'] = f'snapchat-to-immich/{VERSION}'
+        self.sent_total = 0  # files newly sent this run
+        self.done_total = 0  # files now in the destination (including earlier runs)
         destination.log = log
 
     def _check_cancel(self):
@@ -395,6 +402,7 @@ class Importer:
                 res = results.get(rel)
                 if isinstance(res, str):
                     completed[rel] = res
+                    self.sent_total += 1
                     self.log(f'  Sent {path.name[:70]}')
                 else:
                     errors += 1
@@ -402,10 +410,85 @@ class Importer:
             save_journal()
             self.progress('upload', min(start + batch, len(pending)), len(pending))
         self.dest.finish(list(dict.fromkeys(completed.values())))
+        self.done_total += len(completed)
         self.log(f'  Done: {len(completed)} sent/verified, {errors} failed.')
         if errors:
             self.log('  Run this same ZIP/link again to retry the failed files; finished ones are skipped.')
         return errors == 0
+
+    # ---- storage check before starting
+
+    def remote_zip_size(self, url: str) -> Optional[int]:
+        """Size of a Snapchat ZIP without downloading it (signed URLs only allow GET, so ask for 1 byte)."""
+        try:
+            with self.session.get(url, headers={'Range': 'bytes=0-0'}, stream=True, timeout=(15, 30)) as r:
+                if r.status_code == 206 and '/' in r.headers.get('Content-Range', ''):
+                    return int(r.headers['Content-Range'].rsplit('/', 1)[1])
+                if r.ok and r.headers.get('Content-Length'):
+                    return int(r.headers['Content-Length'])
+        except (requests.RequestException, ValueError):
+            pass
+        return None
+
+    def check_space(self, links: Iterable[str] = (), zip_files: Iterable[Path] = ()) -> 'SpaceReport':
+        """Estimate how much storage the import needs here and at the destination."""
+        rep = SpaceReport()
+        for raw in links:
+            try:
+                url, _ = clean_link(raw)
+            except ImportError_:
+                continue
+            identity = hashlib.sha256(urlsplit(url).path.encode()).hexdigest()[:16]
+            saved = self.work_dir / identity / 'snapchat.zip'
+            if saved.exists() and zipfile.is_zipfile(saved):
+                media = self._media_size(saved)
+                rep.media += media
+                rep.local_needed += max(0, media - self._extracted_size(self.work_dir / identity / 'media'))
+                continue
+            size = self.remote_zip_size(url)
+            if size is None:
+                rep.unknown += 1
+                continue
+            rep.media += size  # photos/videos barely compress, so media ~= ZIP size
+            rep.local_needed += 2 * size  # the ZIP itself + the unpacked copy
+        for f in zip_files:
+            try:
+                media = self._media_size(Path(f))
+            except (OSError, zipfile.BadZipFile):
+                continue
+            rep.media += media
+            rep.local_needed += media
+        probe = self.work_dir
+        while not probe.exists() and probe.parent != probe:
+            probe = probe.parent
+        rep.local_free = shutil.disk_usage(probe).free
+        rep.local_where = str(self.work_dir)
+        rep.dest_free, rep.dest_where = self.dest.free_space()
+        dest_path = getattr(self.dest, 'space_path', None)
+        if rep.dest_free is not None and dest_path:
+            try:
+                if Path(dest_path).stat().st_dev == probe.stat().st_dev:
+                    # Same drive: the temporary copy and the destination copy both need room there.
+                    rep.local_needed += rep.media
+                    rep.dest_free, rep.dest_where = None, f'{rep.dest_where} is on the same drive (counted above)'
+            except OSError:
+                pass
+        return rep
+
+    def _media_size(self, zip_path: Path) -> int:
+        with zipfile.ZipFile(zip_path) as z:
+            return sum(e.file_size for e in self.media_entries_quiet(z))
+
+    @staticmethod
+    def _extracted_size(folder: Path) -> int:
+        return sum(p.stat().st_size for p in folder.rglob('*') if p.is_file()) if folder.exists() else 0
+
+    def media_entries_quiet(self, z: zipfile.ZipFile) -> list:
+        log, self.log = self.log, (lambda m: None)
+        try:
+            return self.media_entries(z)
+        finally:
+            self.log = log
 
     def run(self, links: Iterable[str] = (), zip_files: Iterable[Path] = ()) -> tuple[int, int]:
         """Import everything. Returns (succeeded, failed) archive counts."""
@@ -427,3 +510,43 @@ class Importer:
                 self.log(f'  ERROR: {ex}')
         self.progress('archive', len(jobs), len(jobs))
         return ok, bad
+
+
+SAFETY_MARGIN = 1024 ** 3  # keep at least 1 GB free so the computer stays usable
+
+
+class SpaceReport:
+    """Result of Importer.check_space(). Sizes are bytes; None = could not be measured."""
+
+    def __init__(self):
+        self.media = 0           # total photo/video size to send
+        self.local_needed = 0    # extra space needed on this computer
+        self.local_free = 0
+        self.local_where = ''
+        self.dest_free: Optional[int] = None
+        self.dest_where = ''     # human description of where the destination space was measured
+        self.unknown = 0         # links whose size could not be checked
+
+    @property
+    def local_ok(self) -> bool:
+        return self.local_free - self.local_needed >= SAFETY_MARGIN or self.local_needed == 0
+
+    @property
+    def dest_ok(self) -> Optional[bool]:
+        if self.dest_free is None:
+            return None
+        return self.dest_free >= self.media
+
+    def summary(self) -> str:
+        lines = [f'Your memories are about {human_size(self.media)}.' if self.media else
+                 'Could not measure the size of your memories yet.']
+        lines.append(f'This computer: needs about {human_size(self.local_needed)}, has '
+                     f'{human_size(self.local_free)} free' + (' ✔' if self.local_ok else ' ✖ not enough'))
+        if self.dest_free is not None:
+            lines.append(f'{self.dest_where}: {human_size(self.dest_free)} free' +
+                         (' ✔' if self.dest_ok else ' ✖ not enough'))
+        elif self.dest_where:
+            lines.append(self.dest_where)
+        if self.unknown:
+            lines.append(f'({self.unknown} link(s) could not be measured; they may have expired.)')
+        return '\n'.join(lines)

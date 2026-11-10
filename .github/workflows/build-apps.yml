@@ -1,0 +1,92 @@
+name: Build apps
+# Builds the double-click apps for friends:
+#   Windows: "Snapchat Memories.exe"   Mac: "Snapchat Memories.app" (Apple Silicon + Intel)
+# Every push to main builds them (download from the run's "Artifacts").
+# To publish them on the Releases page: Actions -> Build apps -> Run workflow -> tick "Publish".
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a release so friends can download the apps'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            file: SnapchatMemories-Windows.exe
+          - os: macos-latest
+            file: SnapchatMemories-Mac-AppleSilicon.zip
+          - os: macos-15-intel
+            file: SnapchatMemories-Mac-Intel.zip
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: snapchat-immich-friends
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Add built-in Google sign-in (from the GOOGLE_OAUTH_CLIENT_JSON secret, if set)
+        env:
+          GOOGLE_CLIENT: ${{ secrets.GOOGLE_OAUTH_CLIENT_JSON }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT" ]; then
+            printf '%s' "$GOOGLE_CLIENT" > google_client.json
+            python -c "import json; d=json.load(open('google_client.json')); assert 'installed' in d, 'Use a Desktop app OAuth client'"
+            echo "Google sign-in will be built in."
+          else
+            echo "::warning::GOOGLE_OAUTH_CLIENT_JSON secret not set; Google Photos will ask users for their own client file."
+          fi
+      - name: Build
+        run: pyinstaller -y app.spec
+      - name: Check the app starts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\Snapchat Memories.exe" -ArgumentList '--selftest' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "selftest failed: $($p.ExitCode)" }
+          Copy-Item "dist\Snapchat Memories.exe" "${{ matrix.file }}"
+      - name: Check the app starts (Mac)
+        if: runner.os == 'macOS'
+        run: |
+          "dist/Snapchat Memories.app/Contents/MacOS/Snapchat Memories" --selftest
+          /usr/libexec/PlistBuddy -c 'Print :NSAppleEventsUsageDescription' "dist/Snapchat Memories.app/Contents/Info.plist"
+          ditto -c -k --keepParent "dist/Snapchat Memories.app" "${{ matrix.file }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.file }}
+          path: snapchat-immich-friends/${{ matrix.file }}
+
+  release:
+    needs: build
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(python3 -c "import re;print(re.search(r\"VERSION = '([^']+)'\", open('snapchat-immich-friends/snapimmich_core.py').read()).group(1))")
+          TAG="v$VERSION-$(date +%Y%m%d%H%M)"
+          ls -la out
+          gh release create "$TAG" out/* --title "Snapchat Memories $VERSION" --latest \
+            --notes-file snapchat-immich-friends/RELEASE_NOTES.md
