@@ -52,6 +52,14 @@ class Destination:
     def finish(self, ids: list) -> None:
         pass
 
+    def free_space(self) -> tuple:
+        """(free_bytes or None, plain-language description of what was measured)."""
+        return None, ''
+
+    def result_location(self) -> str:
+        """URL or folder where the user can look at the result ('' if unknown)."""
+        return ''
+
 
 # ============================================================================ Immich
 
@@ -151,6 +159,26 @@ class ImmichDestination(Destination):
                 out[rel] = ex
         return out
 
+    def free_space(self):
+        free, where = None, 'Immich server'
+        try:  # per-user storage quota, if the admin set one
+            me = self.api('GET', '/users/me')
+            quota, used = me.get('quotaSizeInBytes'), me.get('quotaUsageInBytes') or 0
+            if quota:
+                free, where = max(0, quota - used), 'Your Immich storage quota'
+        except ImportError_:
+            pass
+        if free is None:
+            try:
+                info = self.api('GET', '/server/storage')
+                free, where = int(info['diskAvailableRaw']), 'Immich server disk'
+            except (ImportError_, KeyError, TypeError, ValueError):
+                return None, 'Immich server: free space could not be checked (the API key may lack permission).'
+        return free, where
+
+    def result_location(self):
+        return self.base[:-4] + (f'/albums/{self.album_id}' if self.album_id else '')
+
     def finish(self, ids):
         self.log(f'  Adding to album "{self.album_name}"...')
         for start in range(0, len(ids), 250):
@@ -175,9 +203,11 @@ class GooglePhotosDestination(Destination):
     TOKEN_URL = 'https://oauth2.googleapis.com/token'
     API = 'https://photoslibrary.googleapis.com/v1'
 
-    def __init__(self, client_secret_file: str, **kw):
+    def __init__(self, client_secret_file: str = '', **kw):
         super().__init__(**kw)
-        self.client_secret_file = Path(client_secret_file or '').expanduser()
+        # No file given -> use the client bundled with the app by the maintainer, if any.
+        self.client_secret_file = (Path(client_secret_file).expanduser() if client_secret_file
+                                   else builtin_google_client() or Path(''))
         self.client_id = self.client_secret = ''
         self.access_token = ''
         self.refresh_token = ''
@@ -191,10 +221,17 @@ class GooglePhotosDestination(Destination):
 
     # ---- OAuth (installed-app loopback flow with PKCE)
 
+    def free_space(self):
+        return None, ('Google storage: make sure your Google account has enough free space '
+                      '(check at one.google.com/storage).')
+
+    def result_location(self):
+        return 'https://photos.google.com/albums'
+
     def _load_client(self):
         if not self.client_secret_file.is_file():
-            raise ImportError_('Choose the Google OAuth client file (client_secret_....json). '
-                               'See the README for the 5-minute setup.')
+            raise ImportError_('Google sign-in is not set up in this copy of the app. Ask the person who '
+                               'shared it, or choose your own Google client file under More options.')
         try:
             data = json.loads(self.client_secret_file.read_text(encoding='utf-8'))
             info = data.get('installed') or data.get('web') or data
@@ -336,6 +373,12 @@ class GooglePhotosDestination(Destination):
         return out
 
 
+def builtin_google_client() -> Optional[Path]:
+    from snapimmich_core import resource_dir
+    p = resource_dir() / 'google_client.json'
+    return p if p.is_file() else None
+
+
 # ============================================================================ Apple iCloud Photos
 
 def icloud_windows_folder_candidates() -> list[Path]:
@@ -421,6 +464,18 @@ class AppleICloudDestination(Destination):
         raise ImportError_('Apple iCloud Photos is only supported on macOS and Windows. '
                            'Use "Any other cloud / folder" here instead.')
 
+    def free_space(self):
+        target = (Path.home() / 'Pictures') if self.mac else self.folder
+        if not target or not Path(target).exists():
+            return None, ''
+        self.space_path = target
+        free = shutil.disk_usage(target).free
+        note = ('Mac disk (Photos library)' if self.mac else 'This PC (iCloud Photos folder)')
+        return free, note + ' — also check your iCloud storage plan has room'
+
+    def result_location(self):
+        return 'photos-app' if self.mac else str(self.folder or '')
+
     def journal_name(self) -> str:
         if self.mac:
             return 'uploaded-icloud-mac.json'
@@ -495,6 +550,16 @@ class FolderDestination(Destination):
             raise ImportError_(f'Cannot write to {base}: {ex}') from ex
         free = shutil.disk_usage(base).free
         return f'Saving into {base} ({free / 1024 ** 3:.1f} GB free)'
+
+    def free_space(self):
+        probe = self.root
+        while not probe.exists() and probe.parent != probe:
+            probe = probe.parent
+        self.space_path = probe
+        return shutil.disk_usage(probe).free, 'Destination folder'
+
+    def result_location(self):
+        return str(self.root / self.album_name)
 
     def send_batch(self, items):
         out = {}

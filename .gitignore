@@ -5,3 +5,6 @@ __pycache__/
 Snapchat-Immich-Import/
 client_secret*.json
 *.zip
+build/
+dist/
+google_client.json

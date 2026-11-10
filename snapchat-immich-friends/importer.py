@@ -66,7 +66,25 @@ def cli() -> None:
     print('Downloaded/extracted files are kept in:', DEFAULT_WORK_DIR)
 
 
+def selftest() -> int:
+    """Used by CI on the built apps: open and close the window, exit 0 if everything loads."""
+    import tkinter as tk
+    import gui
+    from destinations import builtin_google_client
+    root = tk.Tk()
+    app = gui.App(root)
+    for key in ('google', 'icloud', 'folder', 'immich'):
+        app.dest.set(key)
+        app._on_dest_change()
+        root.update()
+    root.destroy()
+    print('selftest OK; built-in Google sign-in:', bool(builtin_google_client()))
+    return 0
+
+
 def main() -> None:
+    if '--selftest' in sys.argv:
+        sys.exit(selftest())
     if '--cli' not in sys.argv:
         try:
             import gui

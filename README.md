@@ -1,86 +1,36 @@
-# Snapchat Memories → Immich
+# Snapchat Memories mover
 
-Import your exported Snapchat Memories ZIP files into your own [Immich](https://immich.app/) photo library. Works on **Windows** and **macOS**, without Docker or command-line knowledge beyond launching the installer.
+Move all your saved Snapchat Memories into **Google Photos**, **Apple iCloud Photos**, **OneDrive / Dropbox / any folder**, or **Immich**, with the right dates, in three clicks. Works on **Windows** and **Mac**. Nothing to install.
 
-> **Community utility — not affiliated with Snapchat or Immich.** This project is a starting point and has **not** been validated end-to-end against every Snapchat export or Immich version.
+## ⬇️ Download
 
-## Quick start
+| Your computer | Download |
+|---|---|
+| **Windows** | [**Download for Windows**](https://github.com/MMCQ-lab/snapchat-to-immich/releases/latest/download/SnapchatMemories-Windows.exe) |
+| **Mac with Apple chip** (most Macs from 2021 on) | [**Download for Mac (Apple chip)**](https://github.com/MMCQ-lab/snapchat-to-immich/releases/latest/download/SnapchatMemories-Mac-AppleSilicon.zip) |
+| **Older Mac with Intel chip** | [**Download for Mac (Intel)**](https://github.com/MMCQ-lab/snapchat-to-immich/releases/latest/download/SnapchatMemories-Mac-Intel.zip) |
 
-### Windows
+*Which Mac do I have?* Apple menu → **About This Mac**. "Chip: Apple M…" means Apple chip; "Processor: Intel" means Intel.
 
-1. Download this project: **Code → Download ZIP**, then extract the ZIP.
-2. Install [Python 3](https://www.python.org/downloads/windows/) if you do not already have it.
-3. Double-click **`START-WINDOWS.bat`** in the extracted folder.
+## How to use it
 
-### macOS
+**Before you start:** ask Snapchat for your memories. Go to [accounts.snapchat.com](https://accounts.snapchat.com/accounts/downloadmydata) → **My Data** → turn on **Export your Memories** → **Request Only Memories**. Snapchat emails you when they're ready, which can take a few hours to a few days.
 
-1. Download this project: **Code → Download ZIP**, then extract the ZIP.
-2. Install [Python 3](https://www.python.org/downloads/macos/) if necessary.
-3. Open Terminal in the extracted directory and run:
+1. **Open the app.** The first time:
+   - *Windows:* if you see "Windows protected your PC", click **More info → Run anyway**.
+   - *Mac:* unzip it and drag it to **Applications**. If it "can't be opened", go to **System Settings → Privacy & Security → Open Anyway**.
+2. **Choose where your memories should go:** Google Photos, iCloud Photos, a folder, or Immich.
+3. **Add your memories:** on Snapchat's *See exports* page, right-click **Download** → **Copy link**, then click **Paste link** in the app. Or download the ZIP files and click **Add ZIP files**.
+4. **Click "Start moving my memories."** The app first checks that you have enough storage space, then gets to work. You can pause and continue later.
 
-   ```bash
-   bash START-MAC.command
-   ```
+Every step in the app has a **Help** button.
 
-The launchers create a local Python virtual environment, install dependencies, and launch the importer.
+## Good to know
+- **Nothing is deleted:** not from Snapchat, and not from your computer.
+- **Dates are kept**, so memories show up on the day you took them, not the day you imported them.
+- Snapchat's separate caption and sticker images are skipped, so you don't get blank photos.
+- Your passwords and keys are never saved, and nothing is sent anywhere except Snapchat and the place you choose.
 
-## What to prepare
+---
 
-- Your **own** Immich server URL, reachable from your computer (prefer HTTPS).
-- An **Immich API key** created in your Immich account. Give it permissions to upload assets and manage albums; you can revoke it after the import.
-- Signed ZIP download links from **Snapchat → My Data → Exports**.
-- Free disk space for ZIPs **and** extracted media; ZIPs are downloaded **to your computer**, then uploaded to Immich.
-
-At the prompts, enter your Immich URL and API key, then paste **one Snapchat download link at a time**. Both raw URLs and Markdown-formatted links are supported. Press Enter on an empty line when finished.
-
-## Features
-
-- Cleans common copy/paste formatting in signed Snapchat ZIP URLs.
-- Warns about expired download URLs.
-- Downloads and validates ZIP files, extracting supported photos/videos.
-- Uploads media to Immich and creates/reuses an album named **Snapchat Memories**.
-- Records completed uploads locally for resuming interrupted sessions.
-- Keeps downloaded archives and extracted files until **you** decide to delete them.
-
-## Important limitations
-
-- **Snapchat export types vary.** This version expects ZIP files containing photos/videos. An export containing only HTML/JSON links will not import the linked media automatically.
-- **Original capture dates and GPS** stored *only* in Snapchat's JSON metadata are **not** applied. Immich may show ZIP file timestamps instead; embedded EXIF metadata can still help.
-- **Restart behavior:** It resumes by the archive's URL path. Copy a fresh signed link to the same archive path when its temporary signature expires. Importing the same media through different archive identities can still create duplicates.
-- A working network connection is required to Snapchat storage and to your Immich instance.
-- The app is a console utility, not a native Windows/macOS graphical installer.
-
-## Security and privacy
-
-- **Never post signed Snapchat download URLs or Immich API keys** on GitHub, in screenshots, issues, or chat. Anyone with a live signed URL may be able to fetch that archive.
-- The script requests your API key using a hidden prompt. It does **not** write your API key to its journal.
-- Use HTTPS for Immich over the public internet. HTTP exposes the API key to anyone able to intercept the connection; the script warns before proceeding.
-- Personal imports, archives, and virtual environments are intentionally excluded by `.gitignore`.
-- Review this script before executing, as with any community tool.
-
-## Where are the downloaded files?
-
-`~/Snapchat-Immich-Import/` on Windows (under your user directory) or macOS. The importer does not delete files automatically. Verify your Immich album and backup before clearing this folder.
-
-## Manual run for developers
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python importer.py
-```
-
-On Windows, activate with `.venv\Scripts\activate` instead.
-
-## Troubleshooting
-
-- **HTTP 400 or 403 while downloading:** Refresh/copy a new Snapchat signed ZIP link; old links expire. Ensure you copied the complete URL including its query string.
-- **Cannot reach Immich:** Check the server address and whether it is accessible from your computer (e.g. VPN/Tailscale may be required).
-- **Immich 401/403:** Create a new API key with asset upload and album permissions.
-- **Wrong dates:** This importer does not reconstruct Snapchat-only JSON timestamps.
-- **Import interrupted:** Re-run the launcher and re-enter the same archive link; the local journal skips previously successful uploads.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+*For techy folks:* the source, a run-from-source option, and maintainer setup are in [`snapchat-immich-friends/README.md`](snapchat-immich-friends/README.md). MIT licensed. Not affiliated with Snapchat, Google, Apple or Immich.

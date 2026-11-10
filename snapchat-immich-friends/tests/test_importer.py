@@ -56,6 +56,8 @@ class Fake(BaseHTTPRequestHandler):
             return self._send(200, s['albums'])
         if self.path.startswith('/v1/albums'):
             return self._send(200, {'albums': s['g_albums']})
+        if self.path == '/api/users/me':
+            return self._send(200, {'quotaSizeInBytes': 5000, 'quotaUsageInBytes': 1000})
         if self.path == '/snap.zip':
             return self._send(200, raw=s['zipbytes'], ctype='application/zip')
         self._send(404, {})
@@ -219,7 +221,7 @@ def test_google_photos(server, tmp_path, monkeypatch):
 
 
 def test_google_requires_client_file(tmp_path):
-    with pytest.raises(C.ImportError_, match='OAuth client'):
+    with pytest.raises(C.ImportError_, match='Google sign-in is not set up'):
         D.GooglePhotosDestination(str(tmp_path / 'missing.json')).connect()
 
 
@@ -282,3 +284,77 @@ def test_google_browser_sign_in_flow(server, tmp_path, monkeypatch):
     dest.open_browser = fake_browser
     assert 'Signed in' in dest.connect()
     assert dest.access_token == 'tok' and dest.refresh_token == 'r'
+
+
+def test_space_check(server, tmp_path, monkeypatch):
+    base, state = server
+    make_zip(tmp_path / 'src.zip')
+    imp = C.Importer(D.FolderDestination(str(tmp_path / 'out')), work_dir=tmp_path / 'w', log=lambda m: None)
+    assert imp.remote_zip_size(base + '/snap.zip') == len(state['zipbytes'])
+    rep = imp.check_space(zip_files=[tmp_path / 'src.zip'])
+    media = len(b'\xff\xd8jpeg1') + len(b'mp4data') + len(b'\xff\xd8jpeg2')  # overlay excluded
+    assert rep.media == media
+    assert rep.local_needed == 2 * media  # same drive: temp copy + destination copy
+    assert rep.local_ok and 'same drive' in rep.dest_where
+    # pretend the disk is almost full
+    import collections
+    Usage = collections.namedtuple('Usage', 'total used free')
+    monkeypatch.setattr(C.shutil, 'disk_usage', lambda p: Usage(10, 10, 100))
+    rep = imp.check_space(zip_files=[tmp_path / 'src.zip'])
+    assert not rep.local_ok and 'not enough' in rep.summary()
+
+
+def test_immich_quota(server):
+    base, state = server
+    dest = D.ImmichDestination(base, 'good')
+    free, where = dest.free_space()
+    assert (free, where) == (4000, 'Your Immich storage quota')
+
+
+def test_window_full_flow(tmp_path, monkeypatch):
+    """Drive the real window: add a ZIP, Start, space check, finish screen. Skips without a display."""
+    tk = pytest.importorskip('tkinter')
+    monkeypatch.setattr(C, 'config_dir', lambda: tmp_path / 'cfg')
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip('no display')
+    import gui
+    try:
+        app = gui.App(root)
+        make_zip(tmp_path / 'mydata~1.zip')
+        app.dest.set('folder')
+        app.folder.set(str(tmp_path / 'Cloud'))
+        app.work_dir.set(str(tmp_path / 'work'))
+        app._on_dest_change()
+        exp = int(time.time()) + 86400
+        added, bad = app.add_links_from_text(
+            f'junk https://example.com/x.zip [Download](https://storage.googleapis.com/b/a.zip?Expires={exp}'
+            f'&GoogleAccessId=a&Signature=b)')
+        assert (added, len(bad)) == (1, 1)
+        app.items = [{'kind': 'file', 'value': str(tmp_path / 'mydata~1.zip')}]
+        app._refresh_items()
+        app._start()
+        deadline = time.time() + 30
+        while time.time() < deadline and not getattr(app, 'finish_window', None):
+            root.update()
+            time.sleep(0.05)
+        assert getattr(app, 'finish_window', None), app.status.get()
+        assert 'All done! 3 photos and videos' in app.status.get()
+        assert len([p for p in (tmp_path / 'Cloud').rglob('*') if p.is_file()]) == 3
+        assert 'api_key' not in (tmp_path / 'cfg' / 'settings.json').read_text()
+    finally:
+        root.destroy()
+
+
+def test_space_decision():
+    import types
+    tk = pytest.importorskip('tkinter')  # noqa: F841
+    import gui
+    rep = C.SpaceReport()
+    rep.local_free, rep.local_needed = 100, 10 ** 12
+    assert gui.App.space_decision(None, rep) == 'stop'
+    rep.local_free, rep.local_needed, rep.dest_free, rep.media = 10 ** 13, 10, 5, 10 ** 9
+    assert gui.App.space_decision(None, rep) == 'ask'
+    rep.dest_free = None
+    assert gui.App.space_decision(None, rep) == 'go'
