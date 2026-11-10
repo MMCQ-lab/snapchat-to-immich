@@ -104,13 +104,13 @@ Downloads and extracted media are kept in `Snapchat-Immich-Import` in your home 
 ## Maintainers: building the apps for friends
 GitHub Actions builds the double-click apps on every push to `main` (**Actions → Build apps**): a Windows `.exe`, plus Mac `.app` builds for Apple chips and Intel. Each build is launched in CI with `--selftest` before it's kept.
 
-**Publish them** (this creates the download links on the main README): **Actions → Build apps → Run workflow →** tick **Publish** → **Run workflow**.
+**Publish them** (this creates the download links on the main README): **Actions → Build apps → Run workflow → Run workflow**. Manual runs always publish; ordinary pushes only build.
 
 **Built-in Google sign-in (do once, so friends don't need a Google Cloud project):**
 1. Do steps 1–4 of the Google Photos setup above in *your* Google Cloud project. Choose application type **Desktop app**.
 2. On the consent screen, add each friend's Gmail address under **Test users**. Testing mode allows up to 100. Alternatively, submit the app for Google verification so anyone can use it.
 3. Copy the whole downloaded JSON and save it as a repository secret: **Settings → Secrets and variables → Actions → New repository secret**, named `GOOGLE_OAUTH_CLIENT_JSON`.
-4. Run **Build apps** again with **Publish** ticked.
+4. Run **Build apps** again (Run workflow).
 
 Google treats the client secret of a Desktop-app OAuth client as non-confidential, so shipping it inside the app is the documented pattern. Access still requires each user's own sign-in and consent. In testing mode, a Google sign-in lasts 7 days, which is plenty for an import.
 

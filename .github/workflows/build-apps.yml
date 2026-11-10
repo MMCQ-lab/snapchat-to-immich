@@ -2,16 +2,12 @@ name: Build apps
 # Builds the double-click apps for friends:
 #   Windows: "Snapchat Memories.exe"   Mac: "Snapchat Memories.app" (Apple Silicon + Intel)
 # Every push to main builds them (download from the run's "Artifacts").
-# To publish them on the Releases page: Actions -> Build apps -> Run workflow -> tick "Publish".
+# To publish them for friends: Actions -> Build apps -> Run workflow -> Run workflow.
+# (A manual run always publishes; pushes only build.)
 on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish a release so friends can download the apps'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -73,7 +69,7 @@ jobs:
 
   release:
     needs: build
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
